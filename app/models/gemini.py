@@ -1,18 +1,20 @@
 import os
-import google.generativeai as genai
+from google import genai
 
 class Model:
     def __init__(self):
         google_api_key = os.getenv('GOOGLE_API_KEY')
-        genai.configure(api_key=google_api_key)
-        GEMINI_MODEL = "models/gemini-1.5-pro-latest"
-        
-        self.model = genai.GenerativeModel(GEMINI_MODEL)
+        GEMINI_MODEL = "gemini-2.0-flash"
+
+        client = genai.Client(api_key=google_api_key)
+
+        self.model = GEMINI_MODEL
+        self.client = client
 
 
-    def get_response(self, query: str):
+    def get_response(self, query: str) -> str:
         try:
-            res = self.model.generate_content([query])
+            res = self.client.models.generate_content(model=self.model, contents=query)
             if not res:
                 return ""
 
@@ -22,14 +24,14 @@ class Model:
             return ""
 
 
-    def execute_prompt_from_audio(self, prompt: str, audio_file_path):
+    def execute_prompt_from_audio(self, prompt: str, audio_file_path: str) -> str:
         try:
-            file_id = genai.upload_file(path=audio_file_path)
-            res = self.model.generate_content([prompt, file_id])
+            file = self.client.files.upload(file=audio_file_path)
+            res = self.client.models.generate_content(model=self.model, contents=[prompt, file])
             if not res:
                 return ""
         
             return res.text
         except Exception as e:
-            print(f"Model.get_insights_from_audio: {str(e)}")
+            print(f"Model.execute_prompt_from_audio: {str(e)}")
             return ""
