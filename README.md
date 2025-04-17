@@ -25,11 +25,11 @@ Requires Python 3.11 and up.
     ```
 
 4. **Set up environment variables:**
-    - Create a .env file and configure database connection, API keys, and other required settings.
+    - Copy contents in .env.example to a .env file, and configure database connection, API keys, and other required settings.
 
 5. **Run the application:**
     ```bash
-    python3 app.py 
+    python3 main.py
     ```
 
 6. **Access the API**
