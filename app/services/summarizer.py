@@ -4,6 +4,7 @@ import yt_dlp
 import re
 import tempfile
 import shutil
+from datetime import datetime
 
 class Summarizer:
     """Summarizes a YouTube podcast"""
@@ -87,10 +88,92 @@ class Summarizer:
                     "title": info.get("title", "Unknown"),
                     "channel": info.get("channel", "Unknown"),
                     "duration": info.get("duration", 0),
-                    "description": info.get("description", "")
+                    "description": info.get("description", ""),
+                    "publish_date": info.get("upload_date", datetime.now().date().isoformat()),
+                    "url": url
                 }
             except Exception as e:
                 raise RuntimeError(f"Failed to fetch video info: {e}")
+
+
+    def get_speaker_interviewee_name(self, yt_description: str) -> str:
+        prompt = f"""
+        Extract the full name of the speaker or interviewee from the following YouTube description.
+
+        The name might appear early in the description, possibly following phrases like:
+        - "interview with"
+        - "conversation with"
+        - "chatting with"
+        - "speaking with"
+        - "a talk with"
+        - "talking to"
+        - "joined by"
+        - "featuring"
+        - "with special guest"
+        - or, in the case of a solo podcast, they may simply be introduced as the host or the person presenting the topic.
+
+        Please format the name in the 'First Last' format (e.g., 'John Doe'), even if the description presents it differently (e.g., 'Doe, John'). 
+
+        If a full name is not available, return the most complete identifier that refers to the speaker or interviewee (e.g., first name, handle, or username). Prioritize real full names when possible.
+
+        It is **important that you only return the name of the speaker or interviewee, and no additional information**.
+
+        Description:
+        {yt_description}
+        """
+        res = self.model.get_response(prompt)
+        return res.strip()
+
+
+    def format_duration(self, seconds: int) -> str:
+        """Format duration in seconds to hours and minutes."""
+        hours, remainder = divmod(seconds, 3600)
+        minutes, seconds = divmod(remainder, 60)
+
+        if hours > 0:
+            return f"{hours} hour{'s' if hours != 1 else ''} {minutes} minute{'s' if minutes != 1 else ''}"
+        else:
+            return f"{minutes} minute{'s' if minutes != 1 else ''}"
+
+
+    def generate_filename(self, video_info: dict) -> str:
+        date = video_info.get("publish_date")
+        channel = video_info.get("channel").replace(" ", "")
+        # title = self.sanitize_filename(video_info.get("title", "Untitled")).replace(" ", "_")
+        speaker_interviewee = self.get_speaker_interviewee_name(video_info.get("description")).replace(" ", "")
+
+        # # Trim long titles and ensure filename is not too long
+        # max_title_length = 25
+        # if len(title) > max_title_length:
+        #     title = title[:max_title_length] + "_truncated"
+
+        filename = f"{date}-{speaker_interviewee}-{channel}"
+        return filename
+
+
+    def generate_markdown_file(self, title: str, channel: str, publish_date: str, duration: int, insights: str, url: str, slug: str) -> None:
+        markdown_content = f"""---
+title: "{title}"
+channel: "{channel}"
+published: "{publish_date}"
+duration: "{self.format_duration(duration)}"
+---
+
+{insights}
+
+---
+
+<a href="{url}" target="_blank">Check out the full episode on YouTube!</a>
+        """
+
+        base_dir = os.path.dirname(os.path.abspath(__file__)) # Gets the directory of the current script
+        posts_dir = os.path.join(base_dir, "..", "..", "posts") # Goes up two directories, then to "posts"
+        file_path = os.path.join(posts_dir, f"{slug}.md")
+        os.makedirs(posts_dir, exist_ok=True) # Ensure the directory exists
+
+        # Write content to file
+        with open(file_path, "w", encoding="utf-8") as file:
+            file.write(markdown_content)
 
 
     def get_summary(self, url: str) -> dict:
@@ -101,24 +184,38 @@ class Summarizer:
 
             # Check duration
             if video_info["duration"] > 7200:  # 2 hours
-                return {"error": "Video too long. Maximum duration is 2 hours."}
+                raise ValueError("Video duration too long. Maximum duration is 2 hours.")
 
             # Download audio
             audio_path = self.download_audio(url)
 
             # Generate summary
-            prompt = """
-            Analyze this podcast audio and provide a comprehensive summary with the following structure:
+            prompt = f"""
+            Given this audio file, write an engaging blog article about this podcast. The blog article should:
 
-            1. OVERVIEW: A concise 2-3 sentence summary of what the podcast is about, including the main topic and speakers if identifiable.
+            - Use a single '#' for the main title (H1 heading)
+                * Create a title that captures the essence of the podcast
+                * DO NOT use generic terms like "summary," "review," or "overview" in the title
+            - Include a brief introduction (2-3 sentences) that gives context about the podcast and its host/guests. Refer to the podcast's description for more context but DO NOT copy from it directly:
+                - {video_info.get("description")}
+            - Present 3-5 valuable insights from the podcast as distinct sections with descriptive headings (avoid numbering the headings)
+            - Incorporate 2-3 notable direct quotes from the podcast
+            - End with a brief conclusion that captures the overall value or takeaway 
+            - Add a "Who Is This For?" recommendation section at the very end, using bullet points, that clearly identifies:
+                * Target audience (keep it concise)
+                * Why it is worth listening to (highlight unique insights, practical tools, or perspective shifts that make it valuable)
 
-            2. KEY INSIGHTS: The 3-5 most valuable or interesting insights from the conversation. For each insight, provide 1 descriptive & meaningful sentence.
+            IMPORTANT FORMATTING RULES:
+            1. The ENTIRE article must be between 400-600 words total
+            2. Use proper Markdown syntax. Examples:
+                - Headings: # Main Title, ## Section Heading, and so on
+                - Emphasis: **bold text**, *italic text*
+                - Blockquotes for podcast quotes: > "Quote goes here" — Speaker Name
+                    - Always place quotes on their own line
+                - Lists: * Item or - Item
+            3. DO NOT wrap the response in markdown code blocks (```)
 
-            3. HIGHLIGHTS: Brief mentions of any standout moments, quotes, or surprising information.
-
-            4. RECOMMENDATION: A brief assessment of who might benefit from this podcast and whether it's worth listening to in full (consider factors like information density, unique perspectives, and entertainment value).
-
-            Format the output with clear headings for each section and separate insights with line breaks.
+            Write in a conversational yet intelligent tone that feels like a blog post rather than a summary document. Focus on making the article engaging and valuable to readers who want to quickly understand if this podcast is worth their time.
             """
 
             summary = self.model.execute_prompt_from_audio(prompt, audio_path)
@@ -127,10 +224,14 @@ class Summarizer:
             if os.path.exists(audio_path):
                 os.remove(audio_path)
 
+            # Generate markdown file
+            slug = self.generate_filename(video_info)
+            self.generate_markdown_file(video_info.get("title"), video_info.get("channel"), video_info.get("publish_date"), video_info.get("duration"), summary, video_info.get("url"), slug)
+
             return {
                 "video_info": video_info,
                 "summary": summary
             }
 
         except Exception as e:
-            return {"error": str(e)}
+            raise RuntimeError(f"Error summarizing the podcast: {str(e)}")
